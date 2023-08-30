@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 fn main() {
     let data = r#"
@@ -86,6 +86,9 @@ fn main() {
 }
 
 fn add_annotation(resource: &mut Value) -> Result<()> {
+    // find the key for this location (/spec/foo) - passed in in real code
+    let index = Value::Number(serde_json::Number::from(5));
+
     if resource.pointer_mut("/metadata/annotations").is_none() {
         resource
             .pointer_mut("/metadata")
@@ -98,33 +101,39 @@ fn add_annotation(resource: &mut Value) -> Result<()> {
             );
     }
 
-    // get the annotation content into a Map
-    let mut m = serde_json::Map::new();
-    if let Some(annotation_data) = resource.pointer_mut("/metadata/annotations/recert-edited") {
-        m = serde_json::from_str(annotation_data.as_str().context("expected annotation data to be a string")?)?
-                .as_object_mut().context("expected annotation value to be an object")?
+    // get the string in the annotation key
+    let s = match resource.pointer_mut("/metadata/annotations/recert-edited") {
+        Some(annotation_data) => {
+            annotation_data.as_str().context("expected annotation data to be a string")?
+        },
+        None => "{}"
     };
 
-    // find the key for this location (/spec/foo)
-    let index = Value::Number(serde_json::Number::from(5));
-    match m.get("/spec/foo") {
+    // parse the json string into a value
+    let mut annotation_value: Value = serde_json::from_str(s).context("annotation data must be valid json")?;
+
+    match annotation_value.get_mut("/spec/foo") {
         Some(locations) => {
             locations
-                .as_array()
+                .as_array_mut()
                 .context("locations must be an array")?
                 .push(index);
         },
         None => {
-            m.insert(String::from("/spec/foo"), Value::Array(vec![index]));
+            annotation_value
+                .as_object_mut()
+                .context("annotation value must be an object")?
+                .insert(String::from("/spec/foo"), Value::Array(vec![index]));
         },
     }
 
+    let new_annotation_value = Value::String(serde_json::to_string(&annotation_value).context("failed to serialize new annotation value")?);
     resource
         .pointer_mut("/metadata/annotations")
         .context("annotations must exist")?
         .as_object_mut()
         .context("annotations must be an object")?
-        .insert(String::from("recert-edited"), Value::String(String::from(Value::Object(m).as_str().context("must translate object into string")?)));
+        .insert(String::from("recert-edited"), new_annotation_value);
 
     Ok(())
 }
